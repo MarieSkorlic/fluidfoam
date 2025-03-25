@@ -12,7 +12,8 @@
 import os, sys
 import subprocess
 import numpy as np
-from fluidfoam import readmesh, readfield, OpenFoamFile
+from fluidfoam import readmesh, readfield, OpenFoamFile, readscalar , readvector , readsymmtensor
+import netCDF4 as nc
 
 class Error(Exception):
     pass
@@ -40,19 +41,24 @@ class OpenFoamSimu(object):
             to read and load. If None, read and load all saved variables.
     """
 
-    def __init__(self, path=None, simu=None, timeStep=None, structured=False,
-                dataToLoad=None, precision=10, order='F'):
+    def __init__(self, path=None, boundary = None , simu=None, timeStep=None, structured=False,
+                dataToLoad=None, precision=15, order='F'):
         
+        filename = "fields.nc"
         if path == None and simu == None:
             # If nothing if given, consider the current directory as the 
             # simulation to load
             self.directory = os.getcwd()+'/'
             self.simu = os.getcwd().split('/')[-1]
+            path = './'
+
         elif simu == None:
             # If only path is provided, consider all subfolders as possible
             # simulations to load
             self.directory = self._choose_simulation(path)
             self.simu = self.directory.split("/")[-2]
+            path = './'
+
         else:
             # If path and simu are provided, consider the given directory
             # as the simulation to load
@@ -60,15 +66,120 @@ class OpenFoamSimu(object):
             if path.endswith('/') is False:
                 path += '/'
             self.directory = path + simu
+
             if self.directory.endswith('/') is False: 
                 self.directory += '/'
-
-        self.readmesh(structured=structured, precision=precision,
+      
+        if not os.path.exists(path + '/' + filename) :
+            self.readmesh(structured=structured, precision=precision,
                       order=order)
-        self.readopenfoam(timeStep=timeStep, structured=structured, 
+            self.readopenfoam(timeStep=timeStep, structured=structured, 
                           dataToLoad=dataToLoad, precision=precision,
                           order=order)
+            self.writeNetCDF(path)
+            self.readNetCDF(path)
+        
+        else :
+            self.readNetCDF(path)
 
+    def writeNetCDF(self,path, boundary = None) : 
+        
+        if boundary is None : 
+            boundary = ['cylinder','bottom']
+            print(f'Boundary is set to {boundary}')
+
+        # Create dataSet NetCDF
+        filename = "fields.nc"
+        ncfile = nc.Dataset(path + filename , "w",format="NETCDF4")
+        #Save mesh coordinates
+        dim_size = len(self.x)
+        dim_name = "cells"
+        ncfile.createDimension(dim_name,dim_size)
+        x_nc = ncfile.createVariable('x', "f4", (dim_name,))
+        y_nc = ncfile.createVariable('y', "f4", (dim_name,))
+        z_nc = ncfile.createVariable('z', "f4", (dim_name,))
+        x_nc[:] = self.x
+        y_nc[:] = self.y
+        z_nc[:] = self.z
+
+        #Save other fields
+        for field in self.variables :
+            
+            ## ---- ## #Read/write scalar fields
+            if np.shape( getattr(self, field) )[0] == len(self.x) :   #if the field is a scalar
+                dim_size = np.shape( getattr(self, field) )[-1] #Computes size of field
+                dim_name = field #unique name for each field
+                ncfile.createDimension(dim_name, dim_size)
+                var = ncfile.createVariable(field.replace(':','_').replace('Mean','bar'), "f4", (dim_name,))
+                data = getattr(self, field) #Computes a.x , a.Cx etc...
+                var[:] = data
+
+
+            ## ---- ## # Read/write vector fields
+            if np.shape( getattr(self, field) )[0] == 3 :   #if the field is a vector                 
+                #Read/write surfaceVector field
+                if np.shape( getattr(self, field) )[-1] == 1 : 
+                    #boundary = ['cylinder','bottom']
+                    for bound in boundary : 
+                        for i in range(3) : 
+                            data = readvector(path , self.timeStep + '/' + field , boundary = bound)[i]
+                            dim_size = np.shape(data)[-1] #Computes size of field 
+                            dim_name = field + bound + str(i) #unique name for each field
+                            var_name = field + "_" + bound + str(i)#unique variable name to avoid overwritting
+                            ncfile.createDimension(dim_name, dim_size)
+                            var = ncfile.createVariable(var_name.replace(':','_').replace('Mean','bar'), "f4", (dim_name,))
+                            var[:] = data
+
+
+                ## Read/write volVector fields
+                else : 
+                    for i in range(3) : 
+                        dim_size = np.shape( getattr(self, field) )[-1] #Computes size of field 
+                        dim_name = field + str(i)  #unique name for each field
+                        ncfile.createDimension(dim_name, dim_size)
+                        var = ncfile.createVariable((field + str(i)).replace(':','_').replace('Mean','bar'), "f4", (dim_name,))
+                        data = getattr(self, field)[i] #Computes a.x , a.Cx etc...
+                        var[:] = data
+
+            ## ---- ## # Read/write symmetric tensor fields
+            if np.shape( getattr(self, field) )[0] == 6 :   #if the field is symmetric tensor 
+                for i in range(6) : 
+                        dim_size = np.shape( getattr(self, field) )[-1] #Computes size of field 
+                        dim_name = field + str(i)  #unique name for each field
+                        ncfile.createDimension(dim_name, dim_size)
+                        var = ncfile.createVariable((field + str(i)).replace(':','_').replace('Mean','bar'), "f4", (dim_name,))
+                        data = getattr(self, field)[i] #Computes a.x , a.Cx etc...
+                        var[:] = data
+            
+            ## ---- ## # Read/write surface scalar field
+            if np.shape( getattr(self, field) )[0] == 1 :   #if the field is a surfaceScalar 
+                #boundary = ['cylinder','bottom']
+                for bound in boundary : 
+                    data = readscalar(path, self.timeStep + '/' + field , boundary = bound)
+                    dim_size = np.shape(data)[0]
+                    dim_name = field + bound  #unique name for each field
+                    var_name = field + "_" + bound #unique variable name 
+                    ncfile.createDimension(dim_name, dim_size)
+                    var = ncfile.createVariable(var_name.replace(':','_').replace('Mean','bar'), "f4", (dim_name,))
+                    var[:] = data
+
+
+        # Close NetCDF file 
+        ncfile.close()
+        print("Done writting in NetCDF file")
+
+    def readNetCDF(self,path) : 
+        filename = "fields.nc"
+        ncfile = nc.Dataset(path + filename , "r" , format="NETCDF4")
+
+        variables = list(ncfile.variables.keys())  # Récupère tous les noms de variables
+
+        field_dict = {}
+        for field in variables : 
+            field_dict[field] = ncfile.variables[field][:]
+            self.__setattr__(field,field_dict[field])     
+        ncfile.close()
+        
     def readmesh(self, structured=False, precision=10, order='F'):
 
         X, Y, Z = readmesh(self.directory, structured=structured,
@@ -261,8 +372,6 @@ class OpenFoamSimu(object):
             directory = directories[0]
 
         return directory + "/"
-
-
 if __name__ == "__main__":
 
     simu = "box"
