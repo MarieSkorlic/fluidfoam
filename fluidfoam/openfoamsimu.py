@@ -41,9 +41,13 @@ class OpenFoamSimu(object):
             to read and load. If None, read and load all saved variables.
     """
 
-    def __init__(self, path=None, boundary = None , simu=None, timeStep=None, structured=False,
+    def __init__(self,  path=None, boundary = None , simu=None, timeStep=None, structured=False,
                 dataToLoad=None, precision=15, order='F'):
         
+        if boundary is None : 
+            boundary = ['cylinder_1' , 'cylinder_2','bottom']
+            print(f'Boundary is set to {boundary}')
+
         filename = "fields.nc"
         if path == None and simu == None:
             # If nothing if given, consider the current directory as the 
@@ -76,18 +80,15 @@ class OpenFoamSimu(object):
             self.readopenfoam(timeStep=timeStep, structured=structured, 
                           dataToLoad=dataToLoad, precision=precision,
                           order=order)
-            self.writeNetCDF(path)
+
+            self.writeNetCDF(path,boundary)
             self.readNetCDF(path)
         
         else :
             self.readNetCDF(path)
 
-    def writeNetCDF(self,path, boundary = None) : 
+    def writeNetCDF(self,path,boundary) : 
         
-        if boundary is None : 
-            boundary = ['cylinder','bottom']
-            print(f'Boundary is set to {boundary}')
-
         # Create dataSet NetCDF
         filename = "fields.nc"
         ncfile = nc.Dataset(path + filename , "w",format="NETCDF4")
@@ -104,13 +105,12 @@ class OpenFoamSimu(object):
 
         #Save other fields
         for field in self.variables :
-            
             ## ---- ## #Read/write scalar fields
             if np.shape( getattr(self, field) )[0] == len(self.x) :   #if the field is a scalar
                 dim_size = np.shape( getattr(self, field) )[-1] #Computes size of field
                 dim_name = field #unique name for each field
                 ncfile.createDimension(dim_name, dim_size)
-                var = ncfile.createVariable(field.replace(':','_').replace('Mean','bar'), "f4", (dim_name,))
+                var = ncfile.createVariable(field.replace(':','_').replace('Mean','bar').replace('.','_'), "f4", (dim_name,))
                 data = getattr(self, field) #Computes a.x , a.Cx etc...
                 var[:] = data
 
@@ -127,7 +127,7 @@ class OpenFoamSimu(object):
                             dim_name = field + bound + str(i) #unique name for each field
                             var_name = field + "_" + bound + str(i)#unique variable name to avoid overwritting
                             ncfile.createDimension(dim_name, dim_size)
-                            var = ncfile.createVariable(var_name.replace(':','_').replace('Mean','bar'), "f4", (dim_name,))
+                            var = ncfile.createVariable(var_name.replace(':','_').replace('Mean','bar').replace('.','_'), "f4", (dim_name,))
                             var[:] = data
 
 
@@ -137,7 +137,7 @@ class OpenFoamSimu(object):
                         dim_size = np.shape( getattr(self, field) )[-1] #Computes size of field 
                         dim_name = field + str(i)  #unique name for each field
                         ncfile.createDimension(dim_name, dim_size)
-                        var = ncfile.createVariable((field + str(i)).replace(':','_').replace('Mean','bar'), "f4", (dim_name,))
+                        var = ncfile.createVariable((field + str(i)).replace(':','_').replace('Mean','bar').replace('.','_'), "f4", (dim_name,))
                         data = getattr(self, field)[i] #Computes a.x , a.Cx etc...
                         var[:] = data
 
@@ -147,10 +147,20 @@ class OpenFoamSimu(object):
                         dim_size = np.shape( getattr(self, field) )[-1] #Computes size of field 
                         dim_name = field + str(i)  #unique name for each field
                         ncfile.createDimension(dim_name, dim_size)
-                        var = ncfile.createVariable((field + str(i)).replace(':','_').replace('Mean','bar'), "f4", (dim_name,))
+                        var = ncfile.createVariable((field + str(i)).replace(':','_').replace('Mean','bar').replace('.','_'), "f4", (dim_name,))
                         data = getattr(self, field)[i] #Computes a.x , a.Cx etc...
                         var[:] = data
-            
+                       
+             ## ---- ## # Read/write non-symmetric tensor fields
+            if np.shape( getattr(self, field) )[0] == 9 :   #if the field is a non-symmectric tensor
+                for i in range(9) : 
+                        dim_size = np.shape( getattr(self, field) )[-1] #Computes size of field 
+                        dim_name = field + str(i)  #unique name for each field
+                        ncfile.createDimension(dim_name, dim_size)
+                        var = ncfile.createVariable((field + str(i)).replace(':','_').replace('Mean','bar').replace('.','_'), "f4", (dim_name,))
+                        data = getattr(self, field)[i] #Computes a.x , a.Cx etc...
+                        var[:] = data
+                        
             ## ---- ## # Read/write surface scalar field
             if np.shape( getattr(self, field) )[0] == 1 :   #if the field is a surfaceScalar 
                 #boundary = ['cylinder','bottom']
@@ -160,7 +170,7 @@ class OpenFoamSimu(object):
                     dim_name = field + bound  #unique name for each field
                     var_name = field + "_" + bound #unique variable name 
                     ncfile.createDimension(dim_name, dim_size)
-                    var = ncfile.createVariable(var_name.replace(':','_').replace('Mean','bar'), "f4", (dim_name,))
+                    var = ncfile.createVariable(var_name.replace(':','_').replace('Mean','bar').replace('.','_'), "f4", (dim_name,))
                     var[:] = data
 
 
@@ -372,6 +382,7 @@ class OpenFoamSimu(object):
             directory = directories[0]
 
         return directory + "/"
+
 if __name__ == "__main__":
 
     simu = "box"
