@@ -175,7 +175,7 @@ def readprobes(path, probes_name="probes", time_name="0", name="U"):
             j += 1
         elif "#".encode() not in line:
             break
-    n_probes = j-2
+    n_probes = j-1
     probes_loc = np.zeros([n_probes, 3], dtype=float)
     j = 0
     header = True
@@ -204,6 +204,7 @@ def readprobes(path, probes_name="probes", time_name="0", name="U"):
                     path_probes_name, time_name, name
                 )
             )
+            print("Marie Test")
             print(
                 str(len(line) - 1)
                 + " probes over "
