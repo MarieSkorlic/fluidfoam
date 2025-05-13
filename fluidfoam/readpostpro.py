@@ -204,7 +204,6 @@ def readprobes(path, probes_name="probes", time_name="0", name="U"):
                     path_probes_name, time_name, name
                 )
             )
-            print("Marie Test")
             print(
                 str(len(line) - 1)
                 + " probes over "
