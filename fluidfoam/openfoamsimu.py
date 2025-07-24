@@ -43,7 +43,6 @@ class OpenFoamSimu(object):
 
     def __init__(self,  path=None, boundary = None, simu=None, timeStep=None, structured=False,
                 dataToLoad=None,NetCDF = True, precision=15, order='F'):
-
         if NetCDF is True : 
             """ If one wants to write and read fileds in netCDF file """
             if boundary is None : 
@@ -241,13 +240,15 @@ class OpenFoamSimu(object):
         ncfile = nc.Dataset(path + filename , "r" , format="NETCDF4")
 
         variables = list(ncfile.variables.keys())  # Récupère tous les noms de variables
-
+        self.variables = variables
+	
         field_dict = {}
         for field in variables : 
             field_dict[field] = ncfile.variables[field][:]
-            self.__setattr__(field,field_dict[field])     
+            self.__setattr__(field,field_dict[field])
         ncfile.close()
-
+	
+	
     def readmesh(self, timeStep=None, structured=False, precision=10, order='F'):
         
         if timeStep is None:
