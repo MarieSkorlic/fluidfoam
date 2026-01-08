@@ -41,12 +41,36 @@ class OpenFoamSimu(object):
             to read and load. If None, read and load all saved variables.
     """
 
+    def __getattr__(self, name):
+        """
+        The user can write simu.U0 instead of simu.U[0]
+        """
+        # ex: U0, U1 ... 
+        if name[-1].isdigit():
+            field_name = name[:-1]
+            idx = int(name[-1])
+
+            if field_name in self.__dict__:
+                field = self.__dict__[field_name]
+                return field[idx]
+
+        raise AttributeError(
+            f"{self.__class__.__name__} has no attribute '{name}'"
+        )
+
+    def add_variable(self, name, value):
+        setattr(self, name, value)
+        if name not in self.variables:
+            self.variables.append(name)
+
+
     def __init__(self,  path=None, boundary = None, simu=None, timeStep=None, structured=False,
                 dataToLoad=None,NetCDF = True, precision=15, order='F'):
+        if boundary is None : 
+                boundary = ['cylinder_1' , 'cylinder_2','bottom']
+                
         if NetCDF is True : 
             """ If one wants to write and read fileds in netCDF file """
-            if boundary is None : 
-                boundary = ['cylinder_1' , 'cylinder_2','bottom']
 
             filename = "fields.nc"
             if path == None and simu == None:
@@ -78,7 +102,7 @@ class OpenFoamSimu(object):
             if not os.path.exists(path + '/' + filename) :
                 self.readmesh(structured=structured, precision=precision,
                         order=order)
-                self.readopenfoam(timeStep=timeStep, structured=structured, 
+                self.readopenfoam(timeStep=timeStep,boundary = boundary, structured=structured, 
                             dataToLoad=dataToLoad, precision=precision,
                             order=order)
 
@@ -119,134 +143,126 @@ class OpenFoamSimu(object):
                 self.readmesh(timeStep=timeStep, structured=structured, 
                       precision=precision, order=order)
 
-                self.readopenfoam(timeStep=timeStep, structured=structured, 
+                self.readopenfoam(timeStep=timeStep,boundary = boundary, structured=structured, 
                           dataToLoad=dataToLoad, precision=precision,
                           order=order)
 
 
-    def writeNetCDF(self,path,boundary) : 
-        
-        # Create dataSet NetCDF
+    def writeNetCDF(self, path, boundary):
+        import netCDF4 as nc
+        import numpy as np
+        import os
+
         filename = "fields.nc"
-        ncfile = nc.Dataset(path + filename , "w",format="NETCDF4")
-        
-        ######################
-        #Save mesh coordinates
-        ######################
-        dim_size = len(self.x)
-        dim_name = "cells"
-        ncfile.createDimension(dim_name,dim_size)
-        x_nc = ncfile.createVariable('x', "f4", (dim_name,))
-        y_nc = ncfile.createVariable('y', "f4", (dim_name,))
-        z_nc = ncfile.createVariable('z', "f4", (dim_name,))
-        x_nc[:] = self.x
-        y_nc[:] = self.y
-        z_nc[:] = self.z
+        ncfile = nc.Dataset(os.path.join(path, filename), "w", format="NETCDF4")
 
-        ####################################
-        #Save mesh coordinates on boundaries
-        ####################################
-        for bound in boundary :
-            xc,yc,zc = readmesh(path , boundary = bound)
-            dim_size = len(xc)
-            dim_name = f'{bound}_dim'
-            ncfile.createDimension(dim_name,dim_size)
-            x_nc = ncfile.createVariable(f"x_{bound}", "f4", (dim_name,))
-            y_nc = ncfile.createVariable(f"y_{bound}", "f4", (dim_name,))
-            z_nc = ncfile.createVariable(f"z_{bound}", "f4", (dim_name,))
-            x_nc[:] = xc
-            y_nc[:] = yc
-            z_nc[:] = zc
+        # --- Mesh coordinates --- #
+        ncfile.createDimension("cells", len(self.x))
+        for name, data in zip(["x","y","z"], [self.x, self.y, self.z]):
+            var = ncfile.createVariable(name, "f4", ("cells",))
+            var[:] = data
 
-        ##################
-        #Save other fields
-        ##################
-        for field in self.variables :
-            ## ---- ## #Read/write Volscalar fields
-            if np.shape( getattr(self, field) )[0] == len(self.x) :   #if the field is a scalar
-                dim_size = np.shape( getattr(self, field) )[-1] #Computes size of field
-                dim_name = field #unique name for each field
-                ncfile.createDimension(dim_name, dim_size)
-                var = ncfile.createVariable(field.replace(':','_').replace('Mean','bar').replace('.','_'), "f4", (dim_name,))
-                data = getattr(self, field) #Computes a.x , a.Cx etc...
+        # --- Boundaries coordinates --- #
+        for bound in boundary:
+            xc, yc, zc = readmesh(path, boundary=bound)
+            dim_name = f"{bound}_dim"
+            ncfile.createDimension(dim_name, len(xc))
+            for name, data in zip([f"x_{bound}", f"y_{bound}", f"z_{bound}"], [xc, yc, zc]):
+                var = ncfile.createVariable(name, "f4", (dim_name,))
                 var[:] = data
 
+        # --- Global dimensions for vectors/tensors --- #
+        if "nComp" not in ncfile.dimensions: ncfile.createDimension("nComp", 3)
+        if "nSymm" not in ncfile.dimensions: ncfile.createDimension("nSymm", 6)
+        if "nTensor" not in ncfile.dimensions: ncfile.createDimension("nTensor", 9)
 
-            ## ---- ## # Read/write Surfacevector fields
-            if np.shape( getattr(self, field) )[0] == 3 :   #if the field is a vector                 
-                #Read/write surfaceVector field
-                if np.shape( getattr(self, field) )[-1] == 1 : 
-                    #boundary = ['cylinder','bottom']
-                    for bound in boundary : 
-                        for i in range(3) : 
-                            data = readvector(path , self.timeStep + '/' + field , boundary = bound)[i]
-                            dim_size = np.shape(data)[-1] #Computes size of field 
-                            dim_name = field + bound + str(i) #unique name for each field
-                            var_name = field + "_" + bound + str(i)#unique variable name to avoid overwritting
-                            ncfile.createDimension(dim_name, dim_size)
-                            var = ncfile.createVariable(var_name.replace(':','_').replace('Mean','bar').replace('.','_'), "f4", (dim_name,))
-                            var[:] = data
+        # --- Save fields --- #
+        for field in self.variables:
 
+            # Skip field if the file does not exist
+            file_path = os.path.join(self.directory, self.timeStep, field)
+            if not os.path.exists(file_path):
+                continue
 
-                ## ---- ## # Read/write volVector fields
-                else : 
-                    for i in range(3) : 
-                        dim_size = np.shape( getattr(self, field) )[-1] #Computes size of field 
-                        dim_name = field + str(i)  #unique name for each field
-                        ncfile.createDimension(dim_name, dim_size)
-                        var = ncfile.createVariable((field + str(i)).replace(':','_').replace('Mean','bar').replace('.','_'), "f4", (dim_name,))
-                        data = getattr(self, field)[i] 
-                        var[:] = data
+            data = getattr(self, field)
+            ndim = np.shape(data)[0]
 
-            ## ---- ## # Read/write symmetric tensor fields
-            if np.shape( getattr(self, field) )[0] == 6 :   #if the field is symmetric tensor 
-                for i in range(6) : 
-                        dim_size = np.shape( getattr(self, field) )[-1] #Computes size of field 
-                        dim_name = field + str(i)  #unique name for each field
-                        ncfile.createDimension(dim_name, dim_size)
-                        var = ncfile.createVariable((field + str(i)).replace(':','_').replace('Mean','bar').replace('.','_'), "f4", (dim_name,))
-                        data = getattr(self, field)[i] 
-                        var[:] = data
-                       
-             ## ---- ## # Read/write non-symmetric tensor fields
-            if np.shape( getattr(self, field) )[0] == 9 :   #if the field is a non-symmectric tensor
-                for i in range(9) : 
-                        dim_size = np.shape( getattr(self, field) )[-1] #Computes size of field 
-                        dim_name = field + str(i)  #unique name for each field
-                        ncfile.createDimension(dim_name, dim_size)
-                        var = ncfile.createVariable((field + str(i)).replace(':','_').replace('Mean','bar').replace('.','_'), "f4", (dim_name,))
-                        data = getattr(self, field)[i] 
-                        var[:] = data
-                        
-            ## ---- ## # Read/write surface scalar field
-            if np.shape( getattr(self, field) )[0] == 1 :   #if the field is a surfaceScalar 
-                #boundary = ['cylinder','bottom']
-                for bound in boundary : 
-                    data = readscalar(path, self.timeStep + '/' + field , boundary = bound)
-                    dim_size = np.shape(data)[0]
-                    dim_name = field + bound  #unique name for each field
-                    var_name = field + "_" + bound #unique variable name 
-                    ncfile.createDimension(dim_name, dim_size)
-                    var = ncfile.createVariable(var_name.replace(':','_').replace('Mean','bar').replace('.','_'), "f4", (dim_name,))
-                    var[:] = data
+            # --- VolScalarField --- #
+            if ndim == len(self.x):
+                var = ncfile.createVariable(field, "f4", ("cells",))
+                var[:] = data
 
+            # --- SurfaceScalarField --- #
+            elif ndim == 1:
+                for bound in boundary:
+                    s_data = readscalar(path, os.path.join(self.timeStep, field), boundary=bound)
+                    dim_name = f"{field}_{bound}_dim"
+                    if dim_name not in ncfile.dimensions:
+                        ncfile.createDimension(dim_name, len(s_data))
+                    var = ncfile.createVariable(f"{field}_{bound}", "f4", (dim_name,))
+                    var[:] = s_data
 
-        # Close NetCDF file 
+            # --- VolVectorField --- #
+            elif ndim == 3:
+                # SurfaceVectorField
+                if np.shape(data)[-1] == 1:
+                    for bound in boundary:
+                        s_data = readvector(path, os.path.join(self.timeStep, field), boundary=bound)
+                        for i in range(3):
+                            dim_name = f"{field}_{bound}{i}_dim"
+                            if dim_name not in ncfile.dimensions:
+                                ncfile.createDimension(dim_name, s_data.shape[1])
+                            var_i = ncfile.createVariable(f"{field}_{bound}{i}", "f4", (dim_name,))
+                            var_i[:] = s_data[i]
+                # VolVectorField
+                else:
+                    for i in range(3):
+                        dim_name = f"{field}{i}_dim"
+                        if dim_name not in ncfile.dimensions:
+                            ncfile.createDimension(dim_name, len(self.x))
+                        var_i = ncfile.createVariable(f"{field}{i}", "f4", (dim_name,))
+                        var_i[:] = data[i]
+
+            # --- Symmetric Tensor --- #
+            elif ndim == 6:
+                for i in range(6):
+                    dim_name = f"{field}{i}_dim"
+                    if dim_name not in ncfile.dimensions:
+                        ncfile.createDimension(dim_name, len(self.x))
+                    var_i = ncfile.createVariable(f"{field}{i}", "f4", (dim_name,))
+                    var_i[:] = data[i]
+
+            # --- Tensor --- #
+            elif ndim == 9:
+                for i in range(9):
+                    dim_name = f"{field}{i}_dim"
+                    if dim_name not in ncfile.dimensions:
+                        ncfile.createDimension(dim_name, len(self.x))
+                    var_i = ncfile.createVariable(f"{field}{i}", "f4", (dim_name,))
+                    var_i[:] = data[i]
+
         ncfile.close()
-        print("Done writting in NetCDF file")
+        print("Done writing NetCDF")
 
-    def readNetCDF(self,path) : 
+
+
+
+
+    def readNetCDF(self, path): 
         filename = "fields.nc"
         ncfile = nc.Dataset(path + filename , "r" , format="NETCDF4")
 
-        variables = list(ncfile.variables.keys())  # Récupère tous les noms de variables
-        self.variables = variables
-	
-        field_dict = {}
-        for field in variables : 
-            field_dict[field] = ncfile.variables[field][:]
-            self.__setattr__(field,field_dict[field])
+        # Récupère tous les noms de variables et les change
+        self.variables = [v.replace('.', '_').replace('Mean','bar').replace(':','_') 
+                        for v in ncfile.variables.keys()]
+
+        # Lecture des données dans les attributs
+        for python_var, orig_var in zip(self.variables, ncfile.variables.keys()):
+            data = ncfile.variables[orig_var][:]
+            setattr(self, python_var, data)
+
         ncfile.close()
+
 	
 	
     def readmesh(self, timeStep=None, structured=False, precision=10, order='F'):
@@ -300,7 +316,7 @@ class OpenFoamSimu(object):
             self.ind = np.array(range(nx*ny*nz))
             self.shape = (nx, ny, nz)
 
-    def readopenfoam(self, timeStep=None, structured=False, dataToLoad=None,
+    def readopenfoam(self, boundary, timeStep=None, structured=False, dataToLoad=None,
                      precision=10, order='F'):
         """
         Reading SedFoam results
@@ -352,21 +368,55 @@ class OpenFoamSimu(object):
             self.variables = dataToLoad
 
         for var in self.variables:
-            #Load all variables and assign them as a variable of the object
-            field = OpenFoamFile(path=self.directory, time_name=self.timeStep,
-                                 name = var, structured=False, precision=precision,
-                                 order=order)
+            #Change name of variables in python 
+            python_var = var.replace('.', '_').replace('Mean','bar').replace(':','_')
+            
+            #Check if file is in path 
+            file_path = os.path.join(self.directory, self.timeStep, var)
+            if not os.path.exists(file_path):
+                continue
+            
+
+            field = OpenFoamFile(
+                path=self.directory,
+                time_name=self.timeStep,
+                name=var,
+                structured=False,
+                precision=precision,
+                order=order
+            )
             values = field.values
 
+            # ---- volume scalar ---- #
             if field.type_data == "scalar":
                 if structured and not field.uniform:
                     try:
                         values = np.reshape(values[self.ind], self.shape, order=order)
                     except:
-                        print("Variable {} could not be loaded".format(var))
+                        print(f"Variable {var} could not be loaded")
                         self.variables.remove(var)
                         continue
+                self.add_variable(python_var,values)
+                self.add_variable(var, values)
+
+                # ---- surface scalar ---- #
+                if np.shape( getattr(self, var) )[-1] == 1 : 
+                    for bound in boundary:
+                        try:
+                            s_values = readscalar(
+                                path=self.directory,
+                                time_name=self.timeStep,
+                                name=var,   
+                                boundary=bound
+                            )
+                            self.add_variable(f"{python_var}_{bound}", s_values)
+                            self.add_variable(f"{var}_{bound}", s_values)
+                        except FileNotFoundError:
+                            continue
+
+            # ---- vector fields ---- #
             elif field.type_data == "vector":
+                # volume vector
                 shape = (3, values.size // 3)
                 values = np.reshape(values, shape, order=order)
                 if structured and not field.uniform:
@@ -375,9 +425,38 @@ class OpenFoamSimu(object):
                         shape = (3,) + tuple(self.shape)
                         values = np.reshape(values, shape, order=order)
                     except:
-                        print("Variable {} could not be loaded".format(var))
+                        print(f"Variable {var} could not be loaded")
                         self.variables.remove(var)
                         continue
+                
+                # Add field
+                self.add_variable(python_var, values)
+                self.add_variable(var, values)
+
+                # Add all components
+                for i in range(values.shape[0]):
+                    self.add_variable(f"{python_var}{i}", values[i])
+                    self.add_variable(f"{var}{i}", values[i])
+
+                # surface vector
+                if np.shape( getattr(self, var) )[-1] == 1 :
+                    for bound in boundary:
+                        try:
+                            s_values = readvector(
+                                path=self.directory,
+                                time_name=self.timeStep,
+                                name=var,        
+                                boundary=bound
+                            )
+                            
+                            #Components
+                            for i in range(3):
+                                self.add_variable(f"{python_var}_{bound}{i}", s_values[i])
+                                self.add_variable(f"{var}_{bound}{i}", s_values[i])
+                        except FileNotFoundError:
+                            continue
+
+
             elif field.type_data == "symmtensor":
                 shape = (6, values.size // 6)
                 values = np.reshape(values, shape, order=order)
@@ -390,6 +469,16 @@ class OpenFoamSimu(object):
                         print("Variable {} could not be loaded".format(var))
                         self.variables.remove(var)
                         continue
+                        
+                # Add field
+                self.add_variable(python_var, values)
+                self.add_variable(var, values)
+
+                # Add all components
+                for i in range(values.shape[0]):
+                    self.add_variable(f"{python_var}{i}", values[i])
+                    self.add_variable(f"{var}{i}", values[i])
+
             elif field.type_data == "tensor":
                 shape = (9, values.size // 9)
                 values = np.reshape(values, shape, order=order)
@@ -402,7 +491,20 @@ class OpenFoamSimu(object):
                         print("Variable {} could not be loaded".format(var))
                         self.variables.remove(var)
                         continue
-            self.__setattr__(var.replace('.', '_'), values)
+                        
+                # Add field
+                self.add_variable(python_var, values)
+                self.add_variable(var, values)
+
+                # Add all components
+                for i in range(values.shape[0]):
+                    self.add_variable(f"{python_var}{i}", values[i])
+                    self.add_variable(f"{var}{i}", values[i])
+
+            
+
+            #Set attributes
+            self.__setattr__(var.replace('.', '_').replace('Mean','bar').replace(':','_'), values)
 
     def keys(self):
         """
