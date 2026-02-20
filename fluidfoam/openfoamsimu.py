@@ -140,12 +140,13 @@ class OpenFoamSimu(object):
                 if self.directory.endswith('/') is False: 
                     self.directory += '/'
 
-                self.readmesh(timeStep=timeStep, structured=structured, 
-                      precision=precision, order=order)
+            self.readmesh(boundary = boundary,timeStep=timeStep, structured=structured, 
+                    precision=precision, order=order)
 
-                self.readopenfoam(timeStep=timeStep,boundary = boundary, structured=structured, 
-                          dataToLoad=dataToLoad, precision=precision,
-                          order=order)
+            self.readopenfoam(timeStep=timeStep,boundary = boundary, structured=structured, 
+                        dataToLoad=dataToLoad, precision=precision,
+                        order=order)
+
 
 
     def writeNetCDF(self, path, boundary):
@@ -265,7 +266,7 @@ class OpenFoamSimu(object):
 
 	
 	
-    def readmesh(self, timeStep=None, structured=False, precision=10, order='F'):
+    def readmesh(self,boundary = None ,timeStep=None, structured=False, precision=10, order='F'):
         
         if timeStep is None:
             dir_list = os.listdir(self.directory)
@@ -303,6 +304,7 @@ class OpenFoamSimu(object):
                     print("Variable {} could not be loaded".format(var))
                     self.variables.remove(var)
             X, Y, Z = values[0], values[1], values[2]
+
         except FileNotFoundError:
             X, Y, Z = readmesh(self.directory, structured=structured,
                             precision=precision, order=order)
@@ -315,6 +317,31 @@ class OpenFoamSimu(object):
             nz = np.unique(Z).size
             self.ind = np.array(range(nx*ny*nz))
             self.shape = (nx, ny, nz)
+
+
+        # # --- Boundaries coordinates --- #
+        for bound in boundary :
+            print(f'BOUNDARY: {bound}')  
+            field = OpenFoamFile(path=self.directory, 
+                                time_name=self.timeStep,
+                                name='C', 
+                                boundary = bound,
+                                structured=False, 
+                                precision=precision,
+                                order=order)
+            values = field.values
+            shape = (3, values.size // 3)
+            values = np.reshape(values, shape, order=order)
+    
+
+            xc, yc, zc = values[0],values[1],values[2]
+            setattr(self,f'x_{bound}',xc)
+            setattr(self,f'y_{bound}',yc)
+            setattr(self,f'z_{bound}',zc)
+
+
+
+
 
     def readopenfoam(self, boundary, timeStep=None, structured=False, dataToLoad=None,
                      precision=10, order='F'):
