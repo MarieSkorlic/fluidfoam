@@ -59,86 +59,73 @@ class OpenFoamSimu(object):
         )
 
     def add_variable(self, name, value):
-        setattr(self, name, value)
-        if name not in self.variables:
-            self.variables.append(name)
+
+        python_name = name.replace('.', '_').replace('Mean','bar').replace(':','_')
+        #Python attribute
+        setattr(self, python_name, value)
+
+        #OpenFoam attribute 
+        if python_name != name:
+            setattr(self, name, value)
+
+        #Add attribute only if not in self.variables
+        if python_name not in self.variables:
+            self.variables.append(python_name)
+
 
 
     def __init__(self,  path=None, boundary = None, simu=None, timeStep=None, structured=False,
                 dataToLoad=None,NetCDF = True, precision=15, order='F'):
+        
         if boundary is None : 
-                boundary = ['cylinder_1' , 'cylinder_2','bottom']
-                
+            boundary = ['cylinder_1' , 'cylinder_2','bottom']
+
+
+        if path == None and simu == None:
+            # If nothing if given, consider the current directory as the 
+            # simulation to load
+            self.directory = os.getcwd()+'/'
+            self.simu = os.getcwd().split('/')[-1]
+            path = './'
+
+        elif simu == None:
+            # If only path is provided, consider all subfolders as possible
+            # simulations to load
+            self.directory = self._choose_simulation(path)
+            self.simu = self.directory.split("/")[-2]
+            path = './'
+
+        else:
+            # If path and simu are provided, consider the given directory
+            # as the simulation to load
+            self.simu = simu
+            if path.endswith('/') is False:
+                path += '/'
+            self.directory = path + simu
+
+            if self.directory.endswith('/') is False: 
+                self.directory += '/'
+    
         if NetCDF is True : 
             """ If one wants to write and read fileds in netCDF file """
 
             filename = "fields.nc"
-            if path == None and simu == None:
-                # If nothing if given, consider the current directory as the 
-                # simulation to load
-                self.directory = os.getcwd()+'/'
-                self.simu = os.getcwd().split('/')[-1]
-                path = './'
-
-            elif simu == None:
-                # If only path is provided, consider all subfolders as possible
-                # simulations to load
-                self.directory = self._choose_simulation(path)
-                self.simu = self.directory.split("/")[-2]
-                path = './'
-
-            else:
-                # If path and simu are provided, consider the given directory
-                # as the simulation to load
-                self.simu = simu
-                if path.endswith('/') is False:
-                    path += '/'
-                self.directory = path + simu
-
-                if self.directory.endswith('/') is False: 
-                    self.directory += '/'
-
-        
-            if not os.path.exists(path + '/' + filename) :
-                self.readmesh(structured=structured, precision=precision,
-                        order=order)
+            if not os.path.exists(self.directory + '/' + filename) :
+                self.readmesh(structured=structured, precision=precision,boundary = boundary,
+                order=order)
                 self.readopenfoam(timeStep=timeStep,boundary = boundary, structured=structured, 
-                            dataToLoad=dataToLoad, precision=precision,
-                            order=order)
-
-                self.writeNetCDF(path,boundary)
-                self.readNetCDF(path)
+                    dataToLoad=dataToLoad, precision=precision,
+                    order=order)
+        
+                self.writeNetCDF(self.directory,boundary)
+                self.readNetCDF(self.directory)
             
             else :
-                self.readNetCDF(path)
+                self.readNetCDF(self.directory)
         
         
         else : 
             """ If one wants to read fields directly without reading a netCDF file """
-            if path == None and simu == None:
-                # If nothing if given, consider the current directory as the 
-                # simulation to load
-                self.directory = os.getcwd()+'/'
-                self.simu = os.getcwd().split('/')[-1]
-                path = './'
-
-            elif simu == None:
-                # If only path is provided, consider all subfolders as possible
-                # simulations to load
-                self.directory = self._choose_simulation(path)
-                self.simu = self.directory.split("/")[-2]
-                path = './'
-
-            else:
-                # If path and simu are provided, consider the given directory
-                # as the simulation to load
-                self.simu = simu
-                if path.endswith('/') is False:
-                    path += '/'
-                self.directory = path + simu
-
-                if self.directory.endswith('/') is False: 
-                    self.directory += '/'
 
             self.readmesh(boundary = boundary,timeStep=timeStep, structured=structured, 
                     precision=precision, order=order)
@@ -150,9 +137,6 @@ class OpenFoamSimu(object):
 
 
     def writeNetCDF(self, path, boundary):
-        import netCDF4 as nc
-        import numpy as np
-        import os
 
         filename = "fields.nc"
         ncfile = nc.Dataset(os.path.join(path, filename), "w", format="NETCDF4")
@@ -246,9 +230,6 @@ class OpenFoamSimu(object):
         print("Done writing NetCDF")
 
 
-
-
-
     def readNetCDF(self, path): 
         filename = "fields.nc"
         ncfile = nc.Dataset(path + filename , "r" , format="NETCDF4")
@@ -305,8 +286,26 @@ class OpenFoamSimu(object):
                     self.variables.remove(var)
             X, Y, Z = values[0], values[1], values[2]
 
+            # # --- Boundaries coordinates --- #
+            for bound in boundary :
+                field = OpenFoamFile(path=self.directory, 
+                                time_name=self.timeStep,
+                                name='C', 
+                                boundary = bound,
+                                structured=False, 
+                                precision=precision,
+                                order=order)
+                values = field.values
+                shape = (3, values.size // 3)
+                values = np.reshape(values, shape, order=order)
+        
+                xc, yc, zc = values[0],values[1],values[2]
+                setattr(self,f'x_{bound}',xc)
+                setattr(self,f'y_{bound}',yc)
+                setattr(self,f'z_{bound}',zc)
+
         except FileNotFoundError:
-            X, Y, Z = readmesh(self.directory, structured=structured,
+            X, Y, Z = readmesh(self.directory, boundary = None, structured=structured,
                             precision=precision, order=order)
         self.x = X
         self.y = Y
@@ -318,26 +317,16 @@ class OpenFoamSimu(object):
             self.ind = np.array(range(nx*ny*nz))
             self.shape = (nx, ny, nz)
 
-
         # # --- Boundaries coordinates --- #
         for bound in boundary :
-            print(f'BOUNDARY: {bound}')  
-            field = OpenFoamFile(path=self.directory, 
-                                time_name=self.timeStep,
-                                name='C', 
-                                boundary = bound,
-                                structured=False, 
-                                precision=precision,
-                                order=order)
-            values = field.values
-            shape = (3, values.size // 3)
-            values = np.reshape(values, shape, order=order)
-    
-
-            xc, yc, zc = values[0],values[1],values[2]
+            xc,yc,zc = readmesh(self.directory, boundary = bound, structured=structured,
+                            precision=precision, order=order)
+            
             setattr(self,f'x_{bound}',xc)
             setattr(self,f'y_{bound}',yc)
             setattr(self,f'z_{bound}',zc)
+
+        
 
 
 
@@ -393,16 +382,13 @@ class OpenFoamSimu(object):
                     self.variables.remove(var)
         else:
             self.variables = dataToLoad
+        
 
         for var in self.variables:
-            #Change name of variables in python 
-            python_var = var.replace('.', '_').replace('Mean','bar').replace(':','_')
-            
             #Check if file is in path 
             file_path = os.path.join(self.directory, self.timeStep, var)
             if not os.path.exists(file_path):
-                continue
-            
+                continue           
 
             field = OpenFoamFile(
                 path=self.directory,
@@ -423,7 +409,6 @@ class OpenFoamSimu(object):
                         print(f"Variable {var} could not be loaded")
                         self.variables.remove(var)
                         continue
-                self.add_variable(python_var,values)
                 self.add_variable(var, values)
 
                 # ---- surface scalar ---- #
@@ -436,7 +421,6 @@ class OpenFoamSimu(object):
                                 name=var,   
                                 boundary=bound
                             )
-                            self.add_variable(f"{python_var}_{bound}", s_values)
                             self.add_variable(f"{var}_{bound}", s_values)
                         except FileNotFoundError:
                             continue
@@ -457,13 +441,12 @@ class OpenFoamSimu(object):
                         continue
                 
                 # Add field
-                self.add_variable(python_var, values)
                 self.add_variable(var, values)
 
                 # Add all components
                 for i in range(values.shape[0]):
-                    self.add_variable(f"{python_var}{i}", values[i])
                     self.add_variable(f"{var}{i}", values[i])
+                
 
                 # surface vector
                 if np.shape( getattr(self, var) )[-1] == 1 :
@@ -477,13 +460,12 @@ class OpenFoamSimu(object):
                             )
                             
                             #Components
-                            for i in range(3):
-                                self.add_variable(f"{python_var}_{bound}{i}", s_values[i])
+                            for i in range(s_values.shape[0]):
                                 self.add_variable(f"{var}_{bound}{i}", s_values[i])
                         except FileNotFoundError:
                             continue
 
-
+            # ---- symmtensor fields ---- #
             elif field.type_data == "symmtensor":
                 shape = (6, values.size // 6)
                 values = np.reshape(values, shape, order=order)
@@ -498,14 +480,13 @@ class OpenFoamSimu(object):
                         continue
                         
                 # Add field
-                self.add_variable(python_var, values)
                 self.add_variable(var, values)
 
                 # Add all components
                 for i in range(values.shape[0]):
-                    self.add_variable(f"{python_var}{i}", values[i])
                     self.add_variable(f"{var}{i}", values[i])
 
+            # ---- tensor fields ---- #
             elif field.type_data == "tensor":
                 shape = (9, values.size // 9)
                 values = np.reshape(values, shape, order=order)
@@ -520,15 +501,11 @@ class OpenFoamSimu(object):
                         continue
                         
                 # Add field
-                self.add_variable(python_var, values)
                 self.add_variable(var, values)
 
                 # Add all components
                 for i in range(values.shape[0]):
-                    self.add_variable(f"{python_var}{i}", values[i])
                     self.add_variable(f"{var}{i}", values[i])
-
-            
 
             #Set attributes
             self.__setattr__(var.replace('.', '_').replace('Mean','bar').replace(':','_'), values)
