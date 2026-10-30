@@ -36,6 +36,7 @@ class OpenFoamSimu(object):
             If simu=None, it will lists all existing simulation names in path
             and ask you to choose.\n
         timeStep: str, timeStep to load. If None, load the last time step\n
+        boundary : list of str, if None, do not load boundary coordinates
         structured: bool, true if the mesh is structured\n
         dataToLoad: list of str, list containing the name of the varaibles 
             to read and load. If None, read and load all saved variables.
@@ -74,12 +75,11 @@ class OpenFoamSimu(object):
 
 
 
-    def __init__(self,  path=None, boundary = None, simu=None, timeStep=None, structured=False,
+    def __init__(self,  path=None, simu=None, timeStep=None, 
+                boundary = ['cylinder_1' , 'cylinder_2','bottom'],
+                structured=False,
                 dataToLoad=None,NetCDF = True, precision=15, order='F'):
         
-        if boundary is None : 
-            boundary = ['cylinder_1' , 'cylinder_2','bottom']
-
 
         if path == None and simu == None:
             # If nothing if given, consider the current directory as the 
@@ -248,7 +248,6 @@ class OpenFoamSimu(object):
 	
 	
     def readmesh(self,boundary = None ,timeStep=None, structured=False, precision=10, order='F'):
-        
         if timeStep is None:
             dir_list = os.listdir(self.directory)
             time_list = []
@@ -270,6 +269,7 @@ class OpenFoamSimu(object):
 
         # Check if cell center position is written in the output directory
         try:
+             # # --- Internal mesh coordinates --- #
             field = OpenFoamFile(path=self.directory, time_name=self.timeStep,
                                  name='C', structured=False, precision=precision,
                                  order=order)
@@ -287,24 +287,26 @@ class OpenFoamSimu(object):
             X, Y, Z = values[0], values[1], values[2]
 
             # # --- Boundaries coordinates --- #
-            for bound in boundary :
-                field = OpenFoamFile(path=self.directory, 
-                                time_name=self.timeStep,
-                                name='C', 
-                                boundary = bound,
-                                structured=False, 
-                                precision=precision,
-                                order=order)
-                values = field.values
-                shape = (3, values.size // 3)
-                values = np.reshape(values, shape, order=order)
-        
-                xc, yc, zc = values[0],values[1],values[2]
-                setattr(self,f'x_{bound}',xc)
-                setattr(self,f'y_{bound}',yc)
-                setattr(self,f'z_{bound}',zc)
+            if boundary is not None : 
+                for bound in boundary :
+                    field = OpenFoamFile(path=self.directory, 
+                                    time_name=self.timeStep,
+                                    name='C', 
+                                    boundary = bound,
+                                    structured=False, 
+                                    precision=precision,
+                                    order=order)
+                    values = field.values
+                    shape = (3, values.size // 3)
+                    values = np.reshape(values, shape, order=order)
+            
+                    xc, yc, zc = values[0],values[1],values[2]
+                    setattr(self,f'x_{bound}',xc)
+                    setattr(self,f'y_{bound}',yc)
+                    setattr(self,f'z_{bound}',zc)
 
         except FileNotFoundError:
+            # # --- Internal mesh coordinates --- #
             X, Y, Z = readmesh(self.directory, boundary = None, structured=structured,
                             precision=precision, order=order)
         self.x = X
@@ -317,19 +319,18 @@ class OpenFoamSimu(object):
             self.ind = np.array(range(nx*ny*nz))
             self.shape = (nx, ny, nz)
 
-        # # --- Boundaries coordinates --- #
-        for bound in boundary :
-            xc,yc,zc = readmesh(self.directory, boundary = bound, structured=structured,
-                            precision=precision, order=order)
-            
-            setattr(self,f'x_{bound}',xc)
-            setattr(self,f'y_{bound}',yc)
-            setattr(self,f'z_{bound}',zc)
+            # # --- Boundaries coordinates --- #
+        if boundary is not None : 
+ 
+            for bound in boundary :
+                xc,yc,zc = readmesh(self.directory, boundary = bound, structured=structured,
+                                precision=precision, order=order)
+                
+                setattr(self,f'x_{bound}',xc)
+                setattr(self,f'y_{bound}',yc)
+                setattr(self,f'z_{bound}',zc)
 
         
-
-
-
 
 
     def readopenfoam(self, boundary, timeStep=None, structured=False, dataToLoad=None,
@@ -412,18 +413,19 @@ class OpenFoamSimu(object):
                 self.add_variable(var, values)
 
                 # ---- surface scalar ---- #
-                if np.shape( getattr(self, var) )[-1] == 1 : 
-                    for bound in boundary:
-                        try:
-                            s_values = readscalar(
-                                path=self.directory,
-                                time_name=self.timeStep,
-                                name=var,   
-                                boundary=bound
-                            )
-                            self.add_variable(f"{var}_{bound}", s_values)
-                        except FileNotFoundError:
-                            continue
+                if boundary is not None : 
+                    if np.shape( getattr(self, var) )[-1] == 1 : 
+                        for bound in boundary:
+                            try:
+                                s_values = readscalar(
+                                    path=self.directory,
+                                    time_name=self.timeStep,
+                                    name=var,   
+                                    boundary=bound
+                                )
+                                self.add_variable(f"{var}_{bound}", s_values)
+                            except FileNotFoundError:
+                                continue
 
             # ---- vector fields ---- #
             elif field.type_data == "vector":
@@ -449,21 +451,22 @@ class OpenFoamSimu(object):
                 
 
                 # surface vector
-                if np.shape( getattr(self, var) )[-1] == 1 :
-                    for bound in boundary:
-                        try:
-                            s_values = readvector(
-                                path=self.directory,
-                                time_name=self.timeStep,
-                                name=var,        
-                                boundary=bound
-                            )
-                            
-                            #Components
-                            for i in range(s_values.shape[0]):
-                                self.add_variable(f"{var}_{bound}{i}", s_values[i])
-                        except FileNotFoundError:
-                            continue
+                if boundary is not None : 
+                    if np.shape( getattr(self, var) )[-1] == 1 :
+                        for bound in boundary:
+                            try:
+                                s_values = readvector(
+                                    path=self.directory,
+                                    time_name=self.timeStep,
+                                    name=var,        
+                                    boundary=bound
+                                )
+                                
+                                #Components
+                                for i in range(s_values.shape[0]):
+                                    self.add_variable(f"{var}_{bound}{i}", s_values[i])
+                            except FileNotFoundError:
+                                continue
 
             # ---- symmtensor fields ---- #
             elif field.type_data == "symmtensor":
